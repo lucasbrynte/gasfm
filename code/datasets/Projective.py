@@ -1,14 +1,15 @@
-import cv2  # Do not remove
-import torch
+import torch  # DO NOT REMOVE
+import cv2  # DO NOT REMOVE
+
 from utils import geo_utils, general_utils, dataset_utils, path_utils
 import scipy.io as sio
 import numpy as np
 import os.path
 
 
-def get_raw_data(conf, scan):
+def get_raw_data(scene, use_gt):
     """
-    :param conf:
+    # :param conf:
     :return:
     M - Points Matrix (2mxn)
     Ns - Normalization matrices (mx3x3)
@@ -19,18 +20,15 @@ def get_raw_data(conf, scan):
     # Init
     dataset_path_format = os.path.join(path_utils.path_to_datasets(), 'Projective', '{}.npz')
 
-    # Get conf parameters
-    if scan is None:
-        scan = conf.get_string('dataset.scan')
-    use_gt = conf.get_bool('dataset.use_gt')
-
     # Get raw data
-    dataset = np.load(dataset_path_format.format(scan))
+    dataset = np.load(dataset_path_format.format(scene))
 
     # Get bifocal tensors and 2D points
     M = dataset['M']
     Ps_gt = dataset['Ps_gt']
     Ns = dataset['Ns']
+    N33 = Ns[:, 2, 2][:, None, None]
+    Ns /= N33 # Divide by N33 to ensure last row [0, 0, 1] (although generally the case, a small deviation in scale has been observed for e.g. the PantheonParis scene)
 
     if use_gt:
         M = torch.from_numpy(dataset_utils.correct_matches_global(M, Ps_gt, Ns))
@@ -47,11 +45,11 @@ def test_Ps_M(Ps, M, Ns):
     print("Reprojection Error: Mean = {}, Max = {}".format(np.nanmean(global_rep_err), np.nanmax(global_rep_err)))
 
 
-def test_projective_dataset(scan):
+def test_projective_dataset(scene):
     dataset_path_format = os.path.join(path_utils.path_to_datasets(), 'Projective', '{}.npz')
 
     # Get raw data
-    dataset = np.load(dataset_path_format.format(scan))
+    dataset = np.load(dataset_path_format.format(scene))
 
     # Get bifocal tensors and 2D points
     M = dataset['M']
@@ -72,7 +70,7 @@ def test_projective_dataset(scan):
 
 
 if __name__ == "__main__":
-    scan = "Alcatraz Courtyard"
-    test_projective_dataset(scan)
+    scene = "Alcatraz Courtyard"
+    test_projective_dataset(scene)
 
 

@@ -49,6 +49,7 @@ def plot_img_reprojection_error_bar(err_list, img_list):
     # plotly.offline.plot(fig, filename=path)
 
 
+# UNUSED: Bar plot over reprojection error & symm. epipolar distance (SED), respectively, where each bar (I believe) corresponds to one scene dataset.
 def plot_error_per_images_bar(repreoj_err, symetric_epipolar_dist, imgs_sets, conf, sub_name=""):
     path = os.path.join(utils.path_utils.path_to_exp(conf), 'reprojection_err' + sub_name)
     plot_img_sets_error_bar(repreoj_err, imgs_sets, path, 'Mean Reprojection Error')
@@ -67,6 +68,9 @@ def plot_matrix_heatmap(data_matrix, indices, zmax):
     return hm
 
 
+# UNUSED: Plot heatmaps over reproj. err. & SED.
+# Heatmap dimensions may correspond to cameras & points, but I'm not sure.
+# There are also additional plots for "triplets". The data plotted appears to be essentially the same, but filter based on which indices are defined by the "edges" argument..?
 def plot_heatmaps(repreoj_err, symetric_epipolar_dist, global_reprojection_error, edges, img_list, conf, path=None, static_path=None):
     repreoj_err_edges = torch.zeros(repreoj_err.shape)
     repreoj_err_edges[edges[0], edges[1]] = repreoj_err[edges[0], edges[1]]
@@ -117,24 +121,24 @@ def plot_heatmaps(repreoj_err, symetric_epipolar_dist, global_reprojection_error
         fig.write_image(static_path)
 
 
-def plot_cameras_before_and_after_ba(outputs, errors, conf, phase, scan, epoch=None, bundle_adjustment=False):
+def plot_cameras_before_and_after_ba(outputs, errors, conf, phase, scene, epoch=None, bundle_adjustment=False, additional_identifiers=[]):
     Rs_gt = outputs['Rs_gt']
     ts_gt = outputs['ts_gt']
 
     Rs_pred = outputs['Rs_fixed']
     ts_pred = outputs['ts_fixed']
     pts3D = outputs['pts3D_pred_fixed'][:3,:]
-    Rs_error = errors['Rs_mean']
-    ts_error = errors['ts_mean']
-    plot_cameras(Rs_pred, ts_pred, pts3D, Rs_gt, ts_gt, Rs_error, ts_error, conf, phase, scan=scan, epoch=epoch)
+    Rs_error = errors['R_err_mean']
+    ts_error = errors['t_err_mean']
+    plot_cameras(Rs_pred, ts_pred, pts3D, Rs_gt, ts_gt, Rs_error, ts_error, conf, phase, scene=scene, epoch=epoch, additional_identifiers=additional_identifiers)
 
     if bundle_adjustment:
         Rs_pred = outputs['Rs_ba_fixed']
         ts_pred = outputs['ts_ba_fixed']
         pts3D = outputs['Xs_ba_fixed'][:3,:]
-        Rs_error = errors['Rs_ba_mean']
-        ts_error = errors['ts_ba_mean']
-        plot_cameras(Rs_pred, ts_pred, pts3D, Rs_gt, ts_gt, Rs_error, ts_error, conf, phase, scan=scan+'_ba', epoch=epoch)
+        Rs_error = errors['R_err_ba_mean']
+        ts_error = errors['t_err_ba_mean']
+        plot_cameras(Rs_pred, ts_pred, pts3D, Rs_gt, ts_gt, Rs_error, ts_error, conf, phase, scene=scene+'_ba', epoch=epoch, additional_identifiers=additional_identifiers)
 
 def get_points_colors(images_path, image_names, xs, first_occurence=False):
     m, n, _ = xs.shape
@@ -165,7 +169,7 @@ def get_points_colors(images_path, image_names, xs, first_occurence=False):
 
     return points_colors
 
-def plot_cameras(Rs_pred, ts_pred, pts3D, Rs_gt, ts_gt, Rs_error, ts_error, conf, phase, scan=None, epoch=None):
+def plot_cameras(Rs_pred, ts_pred, pts3D, Rs_gt, ts_gt, Rs_error, ts_error, conf, phase, scene=None, epoch=None, additional_identifiers=[]):
     data = []
     data.append(get_3D_quiver_trace(ts_gt, Rs_gt[:, :3, 2], color='#86CE00', name='cam_gt'))
     data.append(get_3D_quiver_trace(ts_pred, Rs_pred[:, :3, 2], color='#C4451C', name='cam_learn'))
@@ -176,7 +180,7 @@ def plot_cameras(Rs_pred, ts_pred, pts3D, Rs_gt, ts_gt, Rs_error, ts_error, conf
     fig = go.Figure(data=data)
     fig.update_layout(title='Cameras: Rotation Mean = {:.5f}, Translation Mean = {:.5f}'.format(Rs_error.mean(), ts_error.mean()), showlegend=True)
 
-    path = utils.path_utils.path_to_plots(conf, phase, epoch=epoch, scan=scan)
+    path = utils.path_utils.path_to_plots(conf, phase, epoch=epoch, scene=scene, additional_identifiers=additional_identifiers)
     plotly.offline.plot(fig, filename=path, auto_open=False)
 
     return path

@@ -5,6 +5,9 @@ import cvxpy as cp
 from numpy.random._mt19937 import MT19937
 from numpy.random import Generator
 from utils import dataset_utils
+from utils import sparse_utils
+from utils import general_utils
+from utils.general_utils import nonzero_safe
 import dask.array as da
 
 
@@ -49,6 +52,7 @@ def tranlsation_rotation_errors(R_fixed, t_fixed, gt_Rs, gt_ts):
 
 
 def align_cameras(pred_Rs, gt_Rs, pred_ts, gt_ts, return_alignment=False):
+    # NOTE! All "t" vectors are in fact camera centers, C = -R^T * t.
     '''
 
     :param pred_Rs: torch double - n x 3 x 3 predicted camera rotation
@@ -61,9 +65,25 @@ def align_cameras(pred_Rs, gt_Rs, pred_ts, gt_ts, return_alignment=False):
     d = 3
     n = pred_Rs.shape[0]
 
+    pred_Rs_orig = pred_Rs.copy()
+    pred_ts_orig = pred_ts.copy()
+
+    # Find "average" relative rotation between GT & pred (not necessarily itself a rotation):
     Q = np.sum(gt_Rs @ np.transpose(pred_Rs, [0,2,1]), axis=0) #sum over the n views of R_gt[i] @ R_pred[i].T
-    Uq, _, Vqh = np.linalg.svd(Q)
+    try:
+        Uq, _, Vqh = np.linalg.svd(Q)
+    except np.linalg.LinAlgError as e:
+        print('[WARNING] Camera alignment failed at SVD. Simply return predicted poses as-is.')
+        print(repr(e))
+        if return_alignment:
+            similarity_mat = np.eye(4)
+            return pred_Rs_orig, pred_ts_orig, similarity_mat
+        else:
+            return pred_Rs_orig, pred_ts_orig
+
+    # Normalize singular values to acquire an orthogonal matrix:
     sv = np.ones(3)
+    # Finally, apply sign-flip on final singular value, such that we acquire a rotation (with determinant 1):
     sv[-1] = np.linalg.det(Uq @ Vqh)
     R_opt = Uq @ np.diag(sv) @ Vqh
 
@@ -74,13 +94,27 @@ def align_cameras(pred_Rs, gt_Rs, pred_ts, gt_ts, return_alignment=False):
     c_opt = cp.Variable()
     t_opt = cp.Variable((1, d))
 
+    # Find optimal relative translation (t_opt), as well as a scale correction (c_opt) by solving an optimization problem numerically.
+    # The cost function appears to be the sum of normed residuals of the "t" vectors (which are in fact (somewhat misleading) the camera centers, and thus all in the same coordinate system).
+    # The norm is defined by cvxpy.norm, and is probably Euclidean.
+    # If it were squared, we would simply have an unconstrained QP, which should alternatively be possible to solve analytically.
     constraints = []
     obj = cp.Minimize(
         cp.sum(cp.norm(gt_ts - (c_opt * pred_ts + np.ones((n, 1), dtype=np.double) @ t_opt), axis=1)))
     # obj = cp.Minimize(cp.sum(cp.norm(gt_ts.numpy() - (c_opt * pred_ts.numpy() + t_opt_rep), axis=1)))
     prob = cp.Problem(obj, constraints)
-    prob.solve()
-    print("status:", prob.status)
+    try:
+        prob.solve()
+        if not prob.status == "optimal":
+            raise cp.error.SolverError("Status: \"{}\" encountered during alignment between predicted & GT cameras".format(prob.status))
+    except cp.error.SolverError as e:
+        print('[WARNING] Camera alignment failed at optimization. Simply return predicted poses as-is.')
+        print(repr(e))
+        if return_alignment:
+            similarity_mat = np.eye(4)
+            return pred_Rs_orig, pred_ts_orig, similarity_mat
+        else:
+            return pred_Rs_orig, pred_ts_orig
     t_fixed = c_opt.value * pred_ts + t_opt.value.reshape([1,3])
 
     if return_alignment:
@@ -92,19 +126,48 @@ def align_cameras(pred_Rs, gt_Rs, pred_ts, gt_ts, return_alignment=False):
         return R_fixed, t_fixed
 
 
-def decompose_camera_matrix(Ps, Ks=None):
+def invert_euclidean_trafo(Rs, ts):
+    """
+    Given a batch of Euclidean transformations, Rs and ts, such that X -> Rs[i]*X + ts[i],
+    return the corresponding Rs & ts for the inverse transformation, i.e. such that the above
+    formula with the new Rs and ts now maps in the opposite direction.
+    """
+    assert len(Rs.shape) == 3
+    assert Rs.shape[1] == 3
+    assert Rs.shape[2] == 3
+    assert len(ts.shape) == 2
+    assert ts.shape[1] == 3
+    if isinstance(Rs, np.ndarray):
+        Rs_inv = np.transpose(Rs, [0,2,1]) # Rs_inv = Rs.T
+        ts_inv = (-Rs_inv @ ts.reshape([-1, 3, 1])).squeeze() # ts_inv = -Rs.T @ ts = -Rs_inv @ ts
+    else:
+        Rs_inv = Rs.transpose(1, 2) # Rs_inv = Rs.T
+        ts_inv = torch.bmm(-Rs_inv, ts.unsqueeze(-1)).squeeze() # ts_inv = -Rs.T @ ts = -Rs_inv @ ts
+    return Rs_inv, ts_inv
+
+
+def decompose_camera_matrix(Ps, Ks=None, inverse_direction_camera2global=True):
+    """
+    Given camera matrices Ps, first normalize with the inverse of a given calibration matrix (if not provided, assumes camera calibrated already).
+    Next extract R & t components from the P_norm = [R t]
+    Finally returns Rs=R.T as well as camera centers, determined by ts = -R.T @ t.
+    """
     if isinstance(Ps, np.ndarray):
         Rt = np.linalg.inv(Ks) @ Ps if Ks is not None else Ps
-        Rs = np.transpose(Rt[:, 0:3, 0:3], [0,2,1])
-        ts = (-Rs @ Rt[:, 0:3, 3].reshape([-1, 3, 1])).squeeze()
+        Rs = Rt[:, 0:3, 0:3]
+        ts = Rt[:, 0:3, 3]
     else:
         n_cams = Ps.shape[0]
         if Ks is None:
             Ks = torch.eye(3, device=Ps.device).expand((n_cams, 3, 3))
 
         Rt = torch.bmm(Ks.inverse(), Ps)
-        Rs = Rt[:, 0:3, 0:3].transpose(1, 2)
-        ts = torch.bmm(-Rs, Rt[:, 0:3, 3].unsqueeze(-1)).squeeze()
+        Rs = Rt[:, 0:3, 0:3]
+        ts = Rt[:, 0:3, 3]
+
+    if inverse_direction_camera2global:
+        Rs, ts = invert_euclidean_trafo(Rs, ts)
+
     return Rs, ts
 
 
@@ -317,16 +380,87 @@ def reprojection_error_with_points(Ps, Xs, xs, visible_points=None):
     X4 = np.concatenate([Xs, np.ones([n,1])], axis=1) if D == 3 else Xs
 
     if visible_points is None:
-        visible_points = xs[:, :, 0] > 0
+        visible_points = xs_valid_points(xs)
 
     projected_points = Ps @ X4.T  # [m,3,4] @ [4,n] -> [m,3,n]
-    if isinstance(projected_points, np.ndarray):
-        projected_points = np.transpose(projected_points, [0,2,1])  # [m,n,3]
-    else:
-        projected_points = projected_points.transpose(1,2)
-    projected_points = projected_points / projected_points[:,:,-1].reshape([m,n,1])
+    projected_points = projected_points.swapaxes(1, 2)
+    visible_points_idx = nonzero_safe(visible_points)
+    projected_points[visible_points_idx[0], visible_points_idx[1], :] = projected_points[visible_points_idx[0], visible_points_idx[1], :] / projected_points[visible_points_idx[0], visible_points_idx[1], -1][:, None]
     errors = np.linalg.norm(xs[:,:,:2] - projected_points[:,:,:2], axis=2)
     errors[~visible_points] = np.nan
+    return errors
+
+def reprojection_error_backproj_random_view_pairs(Ks, Ps, depths, xs, visible_points=None, calc_reproj_depths=False):
+    """
+    Given predicted depths and backprojected points in a number of given views, calculate an average "2-view reprojection error".
+    For each point in each view, the backprojected point is reprojected in another (random) view in which it is also visible, yielding one residual.
+    The given views may be either estimated or true cameras.
+
+    :param Ks: [m,3,3]
+    :param Ps: [m,3,4]
+    :param depths: [m,n]
+    :param xs: [m,n,2]
+    :return: errors [m,n]
+    """
+    m, n, d = xs.shape
+    assert d == 2
+    assert Ks.shape == (m, 3, 3)
+    assert Ps.shape == (m, 3, 4)
+    assert depths.shape == (m, n)
+
+    if visible_points is None:
+        visible_points = xs_valid_points(xs)
+    assert visible_points.shape == (m, n)
+
+    # Decompose the camera matrices P=K*[R  t] and retrieve R_inv=R.T and t_inv = -R.T*t
+    # Rs, ts = decompose_camera_matrix(Ps, Ks, inverse_direction_camera2global=False)
+    # assert np.allclose(Ps, Ks @ np.concatenate([Rs, ts[:, :, None]], axis=2)) # Verify the identity P=K*[R  t]
+    Rs_inv, ts_inv = decompose_camera_matrix(Ps, Ks, inverse_direction_camera2global=True)
+    # assert np.allclose(np.linalg.norm(Rs, axis=2), np.ones((1, 1))) # Verify unit rows of R
+    # assert np.allclose(np.linalg.norm(Rs_inv, axis=2), np.ones((1, 1))) # Verify unit rows of R_inv
+    # assert np.allclose(Rs_inv, Rs.swapaxes(1, 2)) # Verify R_inv=R^T
+    # assert np.allclose(ts_inv[:, :, None], -Rs.swapaxes(1, 2) @ ts[:, :, None]) # Verify t_inv=-R^T*t
+    assert Rs_inv.shape == (m, 3, 3)
+    assert ts_inv.shape == (m, 3)
+
+    # Before backprojection, normalize the image points
+    xs_hom = np.concatenate([xs, np.ones((m, n, 1))], axis=2)
+    x_norm_hom = (np.linalg.inv(Ks) @ xs_hom.swapaxes(1, 2)).swapaxes(1, 2)
+    x_norm = x_norm_hom[:, :, :-1] / x_norm_hom[:, :, [-1]]
+    assert x_norm.shape == (m, n, d)
+
+    # Build an array X4_local, containing the backprojected points in all views
+    X4_local = np.ones([m, n, 3])
+    X4_local[:, :, :2] = x_norm # First 2 coordinates determined by xs, after normalization
+    X4_local *= depths[:, :, None]
+
+    # Now transform the backprojected points to the global coordinate system:
+    X4_global = ((Rs_inv @ X4_local.swapaxes(1, 2)) + ts_inv[:, :, None]).swapaxes(1, 2)
+
+    # Next, before we do a batch matric multiplication where the initial dimension (the m-dimension) constitutes the batch,
+    # we determine which backprojected point should be projected into which view. If skipping this step, we would simply project
+    # all the points back into the cameras they were backprojected from, and there would be no error.
+
+    # For simplicity and computational efficiency, we project each backprojected point into exactly one other camera (just not the same camera from which we backprojected).
+    # Determine current indices and and values at the specified elements:
+    X4_global_indices = np.array(np.nonzero(visible_points))
+    X4_global_values = X4_global[X4_global_indices[0, :], X4_global_indices[1, :], :]
+    # Carry out the permutation:
+    X4_global_values, X4_global_indices = general_utils.shuffle_coo_matrix_along_axis_while_preserving_sparsity_pattern(X4_global_values, X4_global_indices)
+    # Write back the values at the new (same but reshuffled) positions:
+    X4_global[X4_global_indices[0, :], X4_global_indices[1, :], :] = X4_global_values
+
+    X4_global_hom = np.concatenate([X4_global, np.ones((m, n, 1))], axis=2)
+    projected_points = Ps @ X4_global_hom.swapaxes(1, 2) # [m,3,4] @ [m,4,n] -> [m,3,n]
+    if calc_reproj_depths:
+        reproj_depths = (np.linalg.inv(Ks) @ projected_points)[:, 2, :] # [m,3,n] -> [m,3,n] -> [m,n]
+    projected_points = projected_points.swapaxes(1, 2)
+    visible_points_idx = nonzero_safe(visible_points)
+    projected_points[visible_points_idx[0], visible_points_idx[1], :] = projected_points[visible_points_idx[0], visible_points_idx[1], :] / projected_points[visible_points_idx[0], visible_points_idx[1], -1][:, None]
+    errors = np.linalg.norm(xs[:,:,:2] - projected_points[:,:,:2], axis=2)
+    errors[~visible_points] = np.nan
+    if calc_reproj_depths:
+        return errors, reproj_depths
     return errors
 
 def get_points_in_view(M, img_idx, X=None):
@@ -411,6 +545,7 @@ def normalize_points_cams(Ps, xs, Ns):
     :param Ns:  [m,3,3]
     :return:  norm_P, norm_x
     """
+    assert isinstance(xs, np.ndarray)
     m, n, d = xs.shape
     xs_3 = np.concatenate([xs, np.ones([m, n, 1])], axis=2) if d == 2 else xs
     norm_P = np.zeros_like(Ps)
@@ -473,7 +608,7 @@ def batch_sampson_distance(Fij, pts_i, pts_j):
     return batch_calc_pFp(Fij, pts_i, pts_j) / \
            torch.cat((torch.bmm(Fij, pts_j)[:, 0:2, :], torch.bmm(Fij.transpose(1, 2), pts_i)[:, 0:2, :]), dim=1).norm(p=2, dim=1)
 
-def dlt_triangulation(Ps, xs, visible_points):
+def dlt_triangulation(Ps, xs, visible_points, simplified_dlt=False, return_V_H=False):
     """
     Use  linear triangulation to find the points X[j] such that  xs[i,j] ~ P[i] @ X[j]
     :param Ps:  [m,3,4]
@@ -483,36 +618,55 @@ def dlt_triangulation(Ps, xs, visible_points):
     """
     m, n, _ = xs.shape
     X = np.zeros([n,4])
+    if return_V_H:
+        V_H_ret = []
     for i in range(n):
         cameras_showing_ind = np.where(visible_points[:, i])[0]  # The cameras that show this point
         num_cam_show = len(cameras_showing_ind)
         if num_cam_show < 2:
             X[i] = np.nan
             continue
-        A = np.zeros([3 * num_cam_show, num_cam_show + 4])
+        if simplified_dlt:
+            A = np.zeros([2 * num_cam_show, 4])
+        else:
+            A = np.zeros([3 * num_cam_show, num_cam_show + 4])
         for j, cam_index in enumerate(cameras_showing_ind):
             xij = xs[cam_index, i, :2]
             Pj = Ps[cam_index]
-            A[3 * j:3 * (j + 1), :4] = Pj
-            A[3 * j:3 * j + 2, 4 + j] = -xij
-            A[3 * j + 2, 4 + j] = -1
+            if simplified_dlt:
+                A[2*j     : 2*j + 1, :] = xij[0]*Pj[2, :] - Pj[0, :]
+                A[2*j + 1 : 2*j + 2, :] = xij[1]*Pj[2, :] - Pj[1, :]
+            else:
+                A[3 * j:3 * (j + 1), :4] = Pj
+                A[3 * j:3 * j + 2, 4 + j] = -xij
+                A[3 * j + 2, 4 + j] = -1
 
         if num_cam_show > 40:
             [U, S, V_H] = da.linalg.svd(da.from_array(A))  # in python svd returns V conjugate! so we need the last row and not column
             X[i] = pflat(V_H[-1, :4].compute().reshape([-1, 1])).squeeze()
+            if return_V_H:
+                V_H_ret.append((np.diag(S.compute()), V_H.compute()))
         else:
             [U, S, V_H] = np.linalg.svd(A)  # in python svd returns V conjugate! so we need the last row and not column
             X[i] = pflat(V_H[-1, :4].reshape([-1, 1])).squeeze()
+            if return_V_H:
+                V_H_ret.append((np.diag(S), V_H))
 
+    if return_V_H:
+        return X, V_H_ret
     return X
 
-def n_view_triangulation(Ps, M, Ns=None):
+def n_view_triangulation(Ps, M, Ns=None, return_V_H=False):
     # normalizing matrix can be K inverse or a matrix that normalizes the points in M
+    assert isinstance(Ps, np.ndarray) and isinstance(M, np.ndarray)
     xs = M_to_xs(M)
-    visible_points = xs[:, :, 0] > 0
+    visible_points = xs_valid_points(xs)
     if Ns is not None:
         Ps = Ps.copy()
         Ps, xs = normalize_points_cams(Ps, xs, Ns)
+    if return_V_H:
+        X, V_H = dlt_triangulation(Ps, xs, visible_points, return_V_H=return_V_H)
+        return X.T, V_H
     X = dlt_triangulation(Ps, xs, visible_points)
     return X.T
 
@@ -523,7 +677,13 @@ def xs_valid_points(xs):
     :param xs: [m,n,2]
     :return: A boolean matrix of the visible 2d points
     """
-    return xs[:, :, 0] > 0
+    return dataset_utils.get_M_valid_points(xs)
+    # # NOTE / TODO: This function merely determines which points are visible in which cameras.
+    # # Somewhat confusingly, dataset_utils.get_M_valid_points() is very similar, but returns a mask which is additionally False for entire columns, in case the corresponding point is not deemed to be visible in enough cameras.
+    # if isinstance(xs, np.ndarray):
+    #     return np.abs(xs).sum(axis=2) > 0
+    # else:
+    #     return torch.abs(xs).sum(dim=2) > 0
 
 
 def normalize_M(M, Ns, valid_points=None):
@@ -535,7 +695,11 @@ def normalize_M(M, Ns, valid_points=None):
     norm_M = torch.cat((norm_M, torch.ones(n_images, 1, norm_M.shape[-1], device=M.device)), dim=1)  # [m,3,n]
 
     norm_M = (Ns @ norm_M).permute(0, 2, 1)[:,:,:2]  # [m,3,3]@[m,3,n] -> [m,3,n]->[m,n,3]
-    norm_M[~valid_points] = 0
+    if norm_M.is_cuda:
+        norm_M[~valid_points, :] = 0
+    else:
+        invalid_points_idx = np.nonzero((~valid_points).detach().numpy())
+        norm_M[invalid_points_idx[0], invalid_points_idx[1], :] = 0
     return norm_M
 
 
@@ -566,19 +730,6 @@ def ones_padding(pts):
     return torch.cat((pts, torch.ones(1, pts.shape[1], device=pts.device)))
 
 
-def dilutePoint(M):
-    if M.shape[1] > 20000:
-        param = 4
-    else:
-        param = 3
-
-    valid_pts = dataset_utils.get_M_valid_points(M)
-    rm_pts = valid_pts.sum(axis=0) < param
-    keep_pts = ~rm_pts
-    newM = M[:, keep_pts]
-    return newM
-
-
 def sample_sub_matrix(m,n, part=0.5):
     i_idx = np.sort(np.random.choice(m, size=int(m*part), replace=False))
     j_idx = np.sort(np.random.choice(n, size=int(n*part), replace=False))
@@ -596,3 +747,87 @@ def cross_product_2d_points(pts1, pts2, dim, epsilon=1e-4):
     return cross
 
 
+def extract_specified_depths(depths_sparsemat=None, depths_dense=None, indices=None):
+    """
+    Given depths for all projections (either a SparseMat or a pair of a dense matrix along with
+    indices of the specified elements), extract the depth values in the order of the provided indices
+    (or in case of a SparseMat, the SparseMat.indices).
+    """
+    if depths_sparsemat is not None:
+        # "depths_sparsemat" provided, in which case we do not expect "depths_dense" and "indices".
+        assert depths_dense is None
+        assert indices is None
+        assert isinstance(depths_sparsemat, sparse_utils.SparseMat)
+
+        assert len(depths_sparsemat.shape) == 3
+        assert depths_sparsemat.shape[2] == 1
+
+        depth_values = depths_sparsemat.values.squeeze(1)
+    else:
+        # "depths_dense" and "indices" provided, in which case we do not expect "depths_sparsemat".
+        assert depths_sparsemat is None
+        assert depths_dense is not None
+        assert indices is not None
+
+        assert indices.ndim == 2
+        assert indices.shape[0] == 2
+
+        depth_values = depths_dense[indices[0, :], indices[1, :]]
+
+    assert depth_values.ndim == 1
+
+    return depth_values
+
+
+def determine_depth_scale(depth_values=None, depths_sparsemat=None, depths_dense=None, indices=None):
+    """
+    Given either true or estimated depths of the scenepoints when projecting in the cameras for which it is visible, determine a scale of these depths in a consistent manner, by which we may normalize the scene.
+    """
+    if depth_values is None:
+        depth_values = extract_specified_depths(depths_sparsemat=depths_sparsemat, depths_dense=depths_dense, indices=indices)
+    else:
+        # "depth_values" provided, in which case we expect neither "depths_sparsemat" nor "depths_dense" and "indices".
+        assert depths_sparsemat is None
+        assert depths_dense is None
+        assert indices is None
+
+    # NOTE:
+    # Currently, the total depth scale is determined by considering the depths of all projections as a collection of independent samples.
+    # This is a quite simple approach. As an alternative, we could consider averaging all intra-view average depths, with equal weight on each view.
+    # We would then need access to the original sparse matrix of depths, rather than the extracted "depth_values".
+
+    # if depth_values is not None:
+    #     # "depth_values" provided, in which case we expect neither "depths_sparsemat" nor "depths_dense" and "indices".
+    #     assert depths_sparsemat is None
+    #     assert depths_dense is None
+    #     assert indices is None
+    #     pass
+    # elif depths_sparsemat is not None:
+    #     # "depths_sparsemat" provided, in which case we expect neither "depth_values" nor "depths_dense" and "indices".
+    #     assert depth_values is None
+    #     assert depths_dense is None
+    #     assert indices is None
+    #     assert isinstance(depths_sparsemat, sparse_utils.SparseMat)
+
+    #     assert len(depths_sparsemat.shape) == 3
+    #     assert depths_sparsemat.shape[2] == 1
+
+    #     depth_values = depths_sparsemat.values.squeeze(1)
+    # else:
+    #     # "depths_dense" and "indices" provided, in which case we do not expect "depth_values" or "depths_sparsemat".
+    #     assert depth_values is None
+    #     assert depths_sparsemat is None
+    #     assert depths_dense is not None
+    #     assert indices is not None
+
+    #     assert indices.ndim == 2
+    #     assert indices.shape[0] == 2
+
+    #     depth_values = depths_dense[indices[0, :], indices[1, :]]
+
+    assert depth_values.ndim == 1
+
+    scale = torch.mean(depth_values)
+    # scale = torch.median(depth_values)
+
+    return scale

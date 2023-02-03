@@ -3,7 +3,7 @@ from utils import ceres_utils
 from utils import geo_utils
 
 
-def euc_ba(xs, Rs, ts, Ks, Xs_our=None, Ps=None, Ns=None, repeat=True, triangulation=False, return_repro=True):
+def euc_ba(xs, Rs, ts, Ks, Xs_our=None, Ps=None, Ns=None, repeat=True, triangulation=False, return_repro=True, print_out=True):
     """
     Computes bundle adjustment with ceres solver
     :param xs: 2d points [m,n,2]
@@ -20,7 +20,7 @@ def euc_ba(xs, Rs, ts, Ks, Xs_our=None, Ps=None, Ns=None, repeat=True, triangula
     """
     results = {}
 
-    visible_points = xs[:, :, 0] > 0
+    visible_points = geo_utils.xs_valid_points(xs)
     point_indices = np.stack(np.where(visible_points))
     visible_xs = xs[visible_points]
 
@@ -28,9 +28,12 @@ def euc_ba(xs, Rs, ts, Ks, Xs_our=None, Ps=None, Ns=None, repeat=True, triangula
         Ps = geo_utils.batch_get_camera_matrix_from_rtk(Rs, ts, Ks)
 
     if triangulation:
+        # "Triangulation" case. Replace the predicted 3D structure with a DLT triangulation.
         if Ns is None:
             Ns = np.linalg.inv(Ks)
+        # Normalize initial cameras and 2D points.
         norm_P, norm_x = geo_utils.normalize_points_cams(Ps, xs, Ns)
+        # Perform DLT triangulation.
         Xs = geo_utils.dlt_triangulation(norm_P, norm_x, visible_points)
     else:
         Xs = Xs_our
@@ -38,18 +41,24 @@ def euc_ba(xs, Rs, ts, Ks, Xs_our=None, Ps=None, Ns=None, repeat=True, triangula
     if return_repro:
         results['repro_before'] = np.nanmean(geo_utils.reprojection_error_with_points(Ps, Xs, xs, visible_points))
 
-    new_Rs, new_ts, new_Ps, new_Xs = ceres_utils.run_euclidean_python_ceres(Xs, visible_xs, Rs, ts, Ks, point_indices)
+    new_Rs, new_ts, new_Ps, new_Xs, converged = ceres_utils.run_euclidean_python_ceres(Xs, visible_xs, Rs, ts, Ks, point_indices, print_out=print_out)
+    results['converged1'] = converged
 
     if repeat:
         if return_repro:
             results['repro_middle'] = np.nanmean(geo_utils.reprojection_error_with_points(new_Ps, new_Xs, xs, visible_points))
 
+        # Normalize the refined cameras (and again, redundantly, the 2D points).
         norm_P, norm_x = geo_utils.normalize_points_cams(new_Ps, xs, Ns)
+        # Replace the refined 3D structure solution with another DLT triangulation.
         new_Xs = geo_utils.dlt_triangulation(norm_P, norm_x, visible_points)
 
+        if return_repro:
+            results['repro_middle_triangulated'] = np.nanmean(geo_utils.reprojection_error_with_points(new_Ps, new_Xs, xs, visible_points))
+
         # second ba with triangulated x
-        new_Rs, new_ts, new_Ps, new_Xs = ceres_utils.run_euclidean_python_ceres(new_Xs, visible_xs, new_Rs, new_ts, Ks,
-                                                                         point_indices)
+        new_Rs, new_ts, new_Ps, new_Xs, converged = ceres_utils.run_euclidean_python_ceres(new_Xs, visible_xs, new_Rs, new_ts, Ks, point_indices, print_out=print_out)
+        results['converged2'] = converged
 
     if return_repro:
         results['repro_after'] = np.nanmean(geo_utils.reprojection_error_with_points(new_Ps, new_Xs, xs, visible_points))
@@ -63,7 +72,7 @@ def euc_ba(xs, Rs, ts, Ks, Xs_our=None, Ps=None, Ns=None, repeat=True, triangula
     return results
 
 
-def proj_ba(Ps, xs, Xs_our=None, Ns=None, repeat=True, triangulation=False, return_repro=True,normalize_in_tri=True):
+def proj_ba(Ps, xs, Xs_our=None, Ns=None, repeat=True, triangulation=False, return_repro=True,normalize_in_tri=True, print_out=True):
     """
     Computes bundle adjustment with ceres solve
     :param Ps: cameras [m,3,4]. Ps[i] = Ks[i] @ Rs[i].T @ [I, -ts[i]]
@@ -78,7 +87,7 @@ def proj_ba(Ps, xs, Xs_our=None, Ns=None, repeat=True, triangulation=False, retu
     """
     results = {}
 
-    visible_points = xs[:, :, 0] > 0
+    visible_points = geo_utils.xs_valid_points(xs)
     point_indices = np.stack(np.where(visible_points))
     visible_xs = xs[visible_points]
 
@@ -96,7 +105,8 @@ def proj_ba(Ps, xs, Xs_our=None, Ns=None, repeat=True, triangulation=False, retu
     if return_repro:
         results['repro_before'] = np.nanmean(geo_utils.reprojection_error_with_points(Ps, Xs, xs, visible_points))
 
-    new_Ps, new_Xs = ceres_utils.run_projective_python_ceres(Ps, Xs, visible_xs, point_indices)
+    new_Ps, new_Xs, converged = ceres_utils.run_projective_python_ceres(Ps, Xs, visible_xs, point_indices, print_out=print_out)
+    results['converged1'] = converged
 
     if repeat:
         if return_repro:
@@ -110,7 +120,11 @@ def proj_ba(Ps, xs, Xs_our=None, Ns=None, repeat=True, triangulation=False, retu
         else:
             new_Xs = geo_utils.dlt_triangulation(new_Ps, xs, visible_points)
 
-        new_Ps, new_Xs = ceres_utils.run_projective_python_ceres(new_Ps, new_Xs, visible_xs, point_indices)
+        if return_repro:
+            results['repro_middle_triangulated'] = np.nanmean(geo_utils.reprojection_error_with_points(new_Ps, new_Xs, xs, visible_points))
+
+        new_Ps, new_Xs, converged = ceres_utils.run_projective_python_ceres(new_Ps, new_Xs, visible_xs, point_indices, print_out=print_out)
+        results['converged2'] = converged
 
     if return_repro:
         results['repro_after'] = np.nanmean(geo_utils.reprojection_error_with_points(new_Ps, new_Xs, xs, visible_points))

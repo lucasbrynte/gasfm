@@ -179,7 +179,8 @@ def run_euclidean_python_ceres(Xs, xs, Rs, ts, Ks, point_indices, print_out=True
 
     summary = PyCeres.Summary()
     PyCeres.Solve(options, problem, summary)
-    if print_out:
+    converged = summary.IsSolutionUsable()
+    if print_out or not converged:
         print(summary.FullReport())
 
     if ~Psu.any():
@@ -192,7 +193,7 @@ def run_euclidean_python_ceres(Xs, xs, Rs, ts, Ks, point_indices, print_out=True
     new_Rs, new_ts, new_Ps = reorder_from_c_to_py(new_Ps_for_c, Ks)
     new_Xs = Xs + Xsu.reshape([n_pts,3], order="C")
 
-    return new_Rs, new_ts, new_Ps, new_Xs
+    return new_Rs, new_ts, new_Ps, new_Xs, converged
 
 
 def run_projective_python_ceres(Ps, Xs, xs, point_indices, print_out=True):
@@ -243,10 +244,13 @@ def run_projective_python_ceres(Ps, Xs, xs, point_indices, print_out=True):
 
     options.linear_solver_type = PyCeres.LinearSolverType.DENSE_SCHUR
     options.minimizer_progress_to_stdout = True
+    if not print_out:
+        PyCeres.LoggingType = PyCeres.LoggingType.SILENT
 
     summary = PyCeres.Summary()
     PyCeres.Solve(options, problem, summary)
-    if print_out:
+    converged = summary.IsSolutionUsable()
+    if print_out or not converged:
         print(summary.FullReport())
     Psu = Psu.reshape([m,12], order="C")
     Psu = Psu.reshape([m,3,4], order="F")  #  [m, 12] Each camera is in *column* major as in matlab! the cpp code assumes it because the original code was in matlab
@@ -255,4 +259,4 @@ def run_projective_python_ceres(Ps, Xs, xs, point_indices, print_out=True):
     new_Ps = Ps + Psu
     new_Xs = Xs + Xsu
 
-    return new_Ps, new_Xs
+    return new_Ps, new_Xs, converged

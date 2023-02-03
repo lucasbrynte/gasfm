@@ -22,7 +22,9 @@ class Embedder:
         else:
             freq_bands = torch.linspace(2. ** 0., 2. ** max_freq, steps=N_freqs)
 
+        # Loop over all frequencies:
         for freq in freq_bands:
+            # Loop over sin() & cos():
             for p_fn in self.kwargs['periodic_fns']:
                 embed_fns.append(lambda x, p_fn=p_fn, freq=freq: p_fn(x * freq))
                 out_dim += d
@@ -31,16 +33,23 @@ class Embedder:
         self.out_dim = out_dim
 
     def embed(self, inputs):
+        # Concatenate various embeddings of the inputs:
         return torch.cat([fn(inputs) for fn in self.embed_fns], -1)
 
 
-def get_embedder(multires, in_dim):
+def get_embedder(pos_emb_n_freq, in_dim):
     embed_kwargs = {
+        # Identity function, for simply storing the inputs:
         'include_input': True,
+
         'input_dims': in_dim,
-        'max_freq_log2': multires - 1,
-        'num_freqs': multires,
-        'log_sampling': True,
+
+        # The following are all arguments for configuring a periodic function positional embedding of the inputs.
+        # The "pos_emb_n_freq" value is the number of frequencies to consider, for sin() and cos().
+        'max_freq_log2': pos_emb_n_freq - 1, # Use frequencies 2^k, k \in [0, max_freq_log2].
+        'num_freqs': pos_emb_n_freq,
+        'log_sampling': True, # Uniformly sample exponent k \in [0, max_freq_log2], rather than uniformly sample the resulting 2^k values uniformly med 2^0 and 2^max_freq_log2.
+        # Use both sin & cos functions applied on the input features:
         'periodic_fns': [torch.sin, torch.cos],
     }
 

@@ -1,23 +1,24 @@
 # Python Bundle Adjustment
+These instructions are based on and almost identical to the ones at [https://github.com/drormoran/gasfm/tree/main/bundle_adjustment/README.md](https://github.com/drormoran/gasfm/tree/main/bundle_adjustment/README.md).
 
 
 ## Conda envorinment
-Use the <a href="https://github.com/drormoran/Equivariant-SFM/blob/main/environment.yml"> ESFM</a> environment.
+Use the <a href="https://github.com/lucasbrynte/gasfm/blob/main/environment.yml">gasfm</a> environment.
 ```
-conda activate ESFM
-export PYBIND11_PYTHON_VERSION="3.8"
-export PYTHON_VERSION="3.8"
+conda activate gasfm
+export PYBIND11_PYTHON_VERSION="3.9"
+export PYTHON_VERSION="3.9"
 ```
 
-## Folders
-After set up, the order of the folders would be:
+## Directory structure
+After this set up, the directory structure be:
 ```
-Equivariant-SFM
+gasfm
 ├── bundle_adjustment
 │   ├── ceres-solver
 │   │   ├── ceres-bin
 │   │   |   └── lib
-│   │   |       └── PyCeres.cpython-38-x86_64-linux-gnu.so
+│   │   |       └── PyCeres.cpython-39-x86_64-linux-gnu.so
 │   │   ├── ceres_python_bindings
 │   │   |   └── python_bindings
 │   │   |       └── custom_cpp_cost_functions.cpp
@@ -25,14 +26,13 @@ Equivariant-SFM
 │   └── custom_cpp_cost_functions.cpp
 ├── code
 ├── datasets
-├── results
 ```
 ## Set up
-1. Download the <a href="http://ceres-solver.org/installation.html">Ceres-Solver</a> package to the bundle_adjustment folder:
+1. Clone the <a href="http://ceres-solver.org/installation.html">Ceres-Solver</a> repository to the bundle_adjustment folder and check out version 2.1.0:
 
 ```
 cd bundle_adjustment
-git clone https://ceres-solver.googlesource.com/ceres-solver
+git clone https://ceres-solver.googlesource.com/ceres-solver -b 2.1.0
 ```
 
 
@@ -45,7 +45,7 @@ git clone https://github.com/Edwinem/ceres_python_bindings
 
 
 3. Copy the file "custom_cpp_cost_functions.cpp" and replace the file "ceres-solver/ceres_python_bindings/python_bindings/custom_cpp_cost_functions.cpp".
-This file contains our projective and euclidean custom bundle adjustment functions.
+This file contains projective and euclidean custom bundle adjustment functions.
 
 ```
 cp ../custom_cpp_cost_functions.cpp ceres_python_bindings/python_bindings/custom_cpp_cost_functions.cpp
@@ -54,12 +54,19 @@ cp ../custom_cpp_cost_functions.cpp ceres_python_bindings/python_bindings/custom
 Next, you need to build ceres_python_bindings and ceres-solver and create a shared object file that python can call.
 You can either continue with the instructions here or follow the instructions at the <a href="https://github.com/Edwinem/ceres_python_bindings">ceres_python_bindings</a> repository.
 
-4. run:
+1. run:
 
 ```
 cd ceres_python_bindings
 git submodule init
 git submodule update
+```
+
+
+1. Make sure that the C++ standard library version used during the build is recent enough, and not hard-coded to C++11 by pybind11:
+
+```
+sed -i 's/set(PYBIND11_CPP_STANDARD -std=c++11)/set(PYBIND11_CPP_STANDARD -std=c++17)/g' AddToCeres.cmake
 ```
 
 
@@ -85,14 +92,14 @@ make test
 7. If everything worked you should see the following file:
 
 ```
-bundle_adjustment/ceres-solver/ceres-bin/lib/PyCeres.cpython-38-x86_64-linux-gnu.so
+bundle_adjustment/ceres-solver/ceres-bin/lib/PyCeres.cpython-39-x86_64-linux-gnu.so
 ```
 
-8. If you want to use this bundle adjustment implementation for a different project make sure to add the path of the shared object to linux PATH (in our code this is done for you). In the python project this would be for example:
+8. If you want to use this bundle adjustment implementation for a different project make sure to add the path of the shared object to linux PATH (in the code this is done for you). In the python project this would be for example:
 
 ```
 import sys
-sys.path.append('../bundle_adjustment/ceres-solver/ceres-bin/lib/PyCeres.cpython-38-x86_64-linux-gnu.so')
+sys.path.append('../bundle_adjustment/ceres-solver/ceres-bin/lib/')
 import PyCeres
 ```
 

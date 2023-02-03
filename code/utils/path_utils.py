@@ -1,12 +1,13 @@
 import os
+import shutil
 from utils.Phases import Phases
 
 
-def join_and_create(path, folder):
-    full_path = os.path.join(path, folder)
-    if not os.path.exists(full_path):
-        os.mkdir(full_path)
-
+def join_and_create(*args, create=True):
+    assert len(args) > 0
+    full_path = os.path.join(*args)
+    if create:
+        os.makedirs(full_path, exist_ok=True)
     return full_path
 
 
@@ -14,80 +15,66 @@ def path_to_datasets():
     return os.path.join('..', 'datasets')
 
 
-def path_to_condition(conf):
-    experiments_folder = os.path.join('..', 'results')
-    if not os.path.exists(experiments_folder):
-        os.mkdir(experiments_folder)
-    exp_name = conf.get_string('exp_name')
-    return join_and_create(experiments_folder, exp_name)
+def path_to_exp_root(conf):
+    exp_root_path = os.path.join('..', 'results')
+    return exp_root_path
 
 
-def path_to_exp(conf):
-    exp_ver = conf.get_string('exp_version')
-    exp_ver_path = join_and_create(path_to_condition(conf), exp_ver)
+def path_to_exp(conf, create=True):
+    exp_dir = conf.get_string('exp_dir')
+    exp_root_path = path_to_exp_root(conf)
+    exp_path = join_and_create(exp_root_path, exp_dir, create=create)
+    return exp_path
 
-    return exp_ver_path
 
-
-def path_to_phase(conf, phase):
+def path_to_phase(conf, phase, additional_identifiers=[]):
     exp_path = path_to_exp(conf)
-    return join_and_create(exp_path, phase.name)
+    subdir = '_'.join([phase.name] + additional_identifiers)
+    return join_and_create(exp_path, subdir)
 
 
-def path_to_scan(conf, phase, scan=None):
-    exp_path = path_to_phase(conf, phase)
-    scan = conf.get_string("dataset.scan") if scan is None else scan
-    return join_and_create(exp_path, scan)
+def path_to_scene(conf, phase, scene=None, additional_identifiers=[]):
+    phase_path = path_to_phase(conf, phase, additional_identifiers=additional_identifiers)
+    scene = conf.get_string("dataset.scene") if scene is None else scene
+    return join_and_create(phase_path, scene)
 
 
-def path_to_model(conf, phase, epoch=None, scan=None):
+def path_to_models_dir(conf, phase, scene=None, additional_identifiers=[]):
     if phase in [Phases.TRAINING, Phases.VALIDATION, Phases.TEST]:
         parent_folder = path_to_exp(conf)
     else:
-        parent_folder = path_to_scan(conf, phase, scan=scan)
+        parent_folder = path_to_scene(conf, phase, scene=scene, additional_identifiers=additional_identifiers)
 
-    models_path = join_and_create(parent_folder, 'models')
-
-    if epoch is None:
-        model_file_name = "Final_Model.pt"
-    else:
-        model_file_name = "Model_Ep{}.pt".format(epoch)
-
-    return os.path.join(models_path, model_file_name)
+    models_dir = join_and_create(parent_folder, 'models')
+    return models_dir
 
 
-def path_to_learning_data(conf, phase):
-    return join_and_create(path_to_condition(conf), phase)
-
-
-def path_to_cameras(conf, phase, epoch=None, scan=None):
-    scan_path = path_to_scan(conf, phase, scan=scan)
-    cameras_path = join_and_create(scan_path, 'cameras')
+def path_to_predictions(conf, phase, epoch=None, scene=None, additional_identifiers=[]):
+    scene_path = path_to_scene(conf, phase, scene=scene, additional_identifiers=additional_identifiers)
+    predictions_path = join_and_create(scene_path, 'predictions')
 
     if epoch is None:
-        cameras_file_name = "Final_Cameras"
+        predictions_file_name = "best_predictions"
+    elif epoch == -1:
+        predictions_file_name = "final_predictions"
     else:
-        cameras_file_name = "Cameras_Ep{}".format(epoch)
+        predictions_file_name = "predictions_epoch{:06d}".format(epoch+1)
 
-    return os.path.join(cameras_path, cameras_file_name)
+    return os.path.join(predictions_path, predictions_file_name)
 
 
-def path_to_plots(conf, phase, epoch=None, scan=None):
-    scan_path = path_to_scan(conf, phase, scan=scan)
-    plots_path = join_and_create(scan_path, 'plots')
+def path_to_plots(conf, phase, epoch=None, scene=None, additional_identifiers=[]):
+    scene_path = path_to_scene(conf, phase, scene=scene, additional_identifiers=additional_identifiers)
+    plots_path = join_and_create(scene_path, 'plots')
 
     if epoch is None:
-        plots_file_name = "Final_plots.html"
+        plots_file_name = "best_plots.html"
+    elif epoch == -1:
+        plots_file_name = "final_plots.html"
     else:
-        plots_file_name = "Plot_Ep{}.html".format(epoch)
+        plots_file_name = "plot_epoch{:06d}.html".format(epoch+1)
 
     return os.path.join(plots_path, plots_file_name)
-
-
-def path_to_logs(conf, phase):
-    phase_path = path_to_phase(conf, phase)
-    logs_path = join_and_create(phase_path, "logs")
-    return logs_path
 
 
 def path_to_code_logs(conf):
@@ -98,3 +85,13 @@ def path_to_code_logs(conf):
 
 def path_to_conf(conf_file):
     return os.path.join( 'confs', conf_file)
+
+
+def path_to_ref_conf():
+    return os.path.join( 'confs', 'ref.conf')
+
+
+def path_to_tb_events(conf):
+    exp_path = path_to_exp(conf)
+    tb_path = join_and_create(exp_path, "tb")
+    return tb_path
