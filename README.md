@@ -2,9 +2,9 @@
 
 ### [Paper](https://arxiv.org/abs/2308.15984)
 
-This is the implementation of the CVPR 2024 paper <a href="https://arxiv.org/abs/2308.15984">Learning Structure-from-Motion with Graph Attention Networks</a>, and a fork of the implementation [https://github.com/drormoran/Equivariant-SFM](https://github.com/drormoran/Equivariant-SFM) of the ICCV 2021 paper [Deep Permutation Equivariant Structure from Motion](https://openaccess.thecvf.com/content/ICCV2021/html/Moran_Deep_Permutation_Equivariant_Structure_From_Motion_ICCV_2021_paper.html), used as a baseline and referred to as DPESFM in this paper.
+This is the implementation of the Graph Attention Structure-from-Motion (GASFM) architecture, presented in our CVPR 2024 paper <a href="https://arxiv.org/abs/2308.15984">Learning Structure-from-Motion with Graph Attention Networks</a>. The codebase is forked from the implementation of the ICCV 2021 paper [Deep Permutation Equivariant Structure from Motion](https://openaccess.thecvf.com/content/ICCV2021/html/Moran_Deep_Permutation_Equivariant_Structure_From_Motion_ICCV_2021_paper.html), available at  [https://github.com/drormoran/Equivariant-SFM](https://github.com/drormoran/Equivariant-SFM). That architecture is also used as a baseline and referred to as DPESFM in our paper.
 
-The primary focus of the paper is on Euclidean reconstruction of novel test scenes, achieved by training a graph attention network on a few scenes, which then generalizes well enough to provide an initial solution, locally refined by bundle adjustment. Our experiments demonstrate that high quality reconstructions can be acquired around 5-10 times faster than COLMAP.
+The primary focus of our paper is on Euclidean reconstruction of novel test scenes, achieved by training a graph attention network on a few scenes, which then generalizes well enough to provide an initial solution, locally refined by bundle adjustment. Our experiments demonstrate that high quality reconstructions can be acquired around 5-10 times faster than COLMAP.
 
 
 ### Contents
