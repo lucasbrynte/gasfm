@@ -135,7 +135,7 @@ python main.py --conf path/to/conf --external_params train.n_epochs=100000 eval.
 ## Citation
 If you find this work useful, please cite our paper:
 ```
-@article{brynte2023learning,
+@article{brynte2024learning,
       title = {Learning Structure-from-Motion with Graph Attention Networks}, 
       author = {Lucas Brynte and José Pedro Iglesias and Carl Olsson and Fredrik Kahl},
       journal={IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
