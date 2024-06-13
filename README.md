@@ -1,6 +1,6 @@
 # Learning Structure-from-Motion with Graph Attention Networks <br>
 
-### [Paper](https://arxiv.org/abs/2308.15984)
+### [Paper](https://openaccess.thecvf.com/content/CVPR2024/html/Brynte_Learning_Structure-from-Motion_with_Graph_Attention_Networks_CVPR_2024_paper.html) | [arXiv](https://arxiv.org/abs/2308.15984)
 
 This is the implementation of the Graph Attention Structure-from-Motion (GASFM) architecture, presented in our CVPR 2024 paper <a href="https://arxiv.org/abs/2308.15984">Learning Structure-from-Motion with Graph Attention Networks</a>. The codebase is forked from the implementation of the ICCV 2021 paper [Deep Permutation Equivariant Structure from Motion](https://openaccess.thecvf.com/content/ICCV2021/html/Moran_Deep_Permutation_Equivariant_Structure_From_Motion_ICCV_2021_paper.html), available at  [https://github.com/drormoran/Equivariant-SFM](https://github.com/drormoran/Equivariant-SFM). That architecture is also used as a baseline and referred to as DPESFM in our paper.
 
@@ -135,10 +135,12 @@ python main.py --conf path/to/conf --external_params train.n_epochs=100000 eval.
 ## Citation
 If you find this work useful, please cite our paper:
 ```
-@article{brynte2024learning,
-      title = {Learning Structure-from-Motion with Graph Attention Networks}, 
-      author = {Lucas Brynte and José Pedro Iglesias and Carl Olsson and Fredrik Kahl},
-      journal={IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
-      year = {2024}
+@InProceedings{Brynte_2024_CVPR,
+    author    = {Brynte, Lucas and Iglesias, Jos\'e Pedro and Olsson, Carl and Kahl, Fredrik},
+    title     = {Learning Structure-from-Motion with Graph Attention Networks},
+    booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+    month     = {June},
+    year      = {2024},
+    pages     = {4808-4817}
 }
 ```
